@@ -2,34 +2,37 @@ name: Perpetual Dual Stream
 
 on:
   workflow_dispatch:
-  # هذا الحدث هو المسؤول عن بدء الجلسة الجديدة تلقائياً
   repository_dispatch:
     types: [restart-session]
 
 jobs:
   stream:
     runs-on: ubuntu-latest
-    # نمنح الأكشن صلاحية الكتابة لإعادة تشغيل نفسه
     permissions:
       actions: write
       contents: read
       
     steps:
       - uses: actions/checkout@v4
-      
+
+      # ---------------------------------------------------------
+      # 👇 هذه هي الخطوة الجديدة لحذف السجلات القديمة تلقائياً 👇
+      # ---------------------------------------------------------
+      - name: 🧹 Delete Old Logs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0     # احذف أي شيء أقدم من 0 يوم (أي احذف فوراً)
+          keep_minimum_runs: 2 # ولكن احتفظ بآخر 2 سجل فقط (الحالي والسابق) للتأكد من العمل
+
       - name: System Setup
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable > /dev/null
-          
-          # تشغيل محرك الصوت بضبط احترافي
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
-          
-          # إنشاء القنوات المستقلة لضمان عدم تداخل الصوت
           pactl load-module module-null-sink sink_name=Sink1
           pactl load-module module-null-sink sink_name=Sink2
-          
-          # ضبط الأوصاف والخصائص
           pacmd "update-sink-proplist Sink1 device.description=Stream1"
           pacmd "update-sink-proplist Sink2 device.description=Stream2"
 
@@ -39,17 +42,14 @@ jobs:
       - name: Create Python Script
         run: |
           cat << 'EOF' > main.py
-          import os
-          import subprocess
-          import time
-          import requests
+          import os, subprocess, time, requests
           from pyvirtualdisplay import Display
           from selenium import webdriver
           from selenium.webdriver.chrome.options import Options
           from multiprocessing import Process
 
-          # --- إعدادات الوقت والتحكم ---
-          RUN_MINUTES = 5  # مدة البث (5 دقائق)
+          # --- المدة: 5 دقائق تشغيل ---
+          RUN_MINUTES = 5 
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
 
           def get_driver_options(width, height):
@@ -71,37 +71,25 @@ jobs:
 
           def start_stream(stream_id, rtmp_key, sink_name, width=720, height=1280):
               print(f"🟢 بدء تشغيل البث {stream_id} على القناة {sink_name}")
-              
-              # عزل مخرج الصوت لهذه العملية فقط
               os.environ['PULSE_SINK'] = sink_name
               env_vars = os.environ.copy()
               env_vars['PULSE_LATENCY_MSEC'] = '20'
 
-              # تشغيل الشاشة الوهمية
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
               env_vars['DISPLAY'] = f":{disp.display}"
 
               try:
-                  # جلب البيانات من رابط التحكم
                   response = requests.get(f"{CONTROL_URL}?t={int(time.time())}", timeout=10)
                   lines = [line.strip() for line in response.text.strip().split('\n') if line.strip()]
-                  
-                  if len(lines) < stream_id:
-                      print(f"⚠️ لا توجد بيانات كافية للبث {stream_id}")
-                      return
+                  if len(lines) < stream_id: return
 
                   config = lines[stream_id-1].split()
-                  target_url = config[0]
-                  status = config[1]
-
-                  if status == "1":
-                      # تشغيل المتصفح
+                  if config[1] == "1":
                       driver = webdriver.Chrome(options=get_driver_options(width, height))
-                      driver.get(target_url)
-                      time.sleep(10) # انتظار التحميل
+                      driver.get(config[0])
+                      time.sleep(10)
 
-                      # إخفاء السكرول بار وتطبيق خلفية سوداء (الأساسيات)
                       driver.execute_script("""
                           var style = document.createElement('style');
                           style.innerHTML = 'body { background: black !important; overflow: hidden !important; } ::-webkit-scrollbar { display: none; }';
@@ -111,7 +99,6 @@ jobs:
                           }
                       """)
 
-                      # أمر FFmpeg الاحترافي (نظام الصوت + جودة البث)
                       ffmpeg_cmd = [
                           'ffmpeg', '-y', '-thread_queue_size', '4096',
                           '-f', 'x11grab', '-draw_mouse', '0', '-framerate', '30',
@@ -124,34 +111,21 @@ jobs:
                           '-af', 'aresample=async=1', '-vsync', '1',
                           '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
-                      
-                      ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, env=env_vars)
-                      
-                      # الانتظار للمدة المحددة (5 دقائق)
+                      proc = subprocess.Popen(ffmpeg_cmd, env=env_vars)
                       time.sleep(RUN_MINUTES * 60)
-                      
-                      print(f"⏰ انتهى وقت البث {stream_id} ({RUN_MINUTES} دقيقة)")
-                      ffmpeg_proc.terminate()
+                      proc.terminate()
                       driver.quit()
-
-              except Exception as e:
-                  print(f"❌ خطأ في البث {stream_id}: {e}")
               finally:
                   disp.stop()
 
           if __name__ == "__main__":
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              
               if R1 and R2:
                   p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
                   p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
-                  
                   p1.start(); p2.start()
-                  
-                  # انتظار العمليات حتى تنتهي (بعد 5 دقائق)
-                  p1.join()
-                  p2.join()
-                  print("✅ تم إنهاء المهمة وفصل البثوث بنجاح.")
+                  p1.join(); p2.join()
+                  print("✅ تم إنهاء المهمة.")
           EOF
 
       - name: Run Streaming Script
@@ -160,14 +134,11 @@ jobs:
           R2: ${{ secrets.R2 }}
         run: python main.py
 
-      # --- الخطوة السحرية: الانتظار وبدء جلسة جديدة ---
-      - name: Wait & Trigger New Session
-        if: always()  # لضمان التنفيذ دائماً
+      - name: Wait & Restart
+        if: always()
         run: |
-          echo "⏳ استراحة لمدة دقيقة واحدة قبل بدء جلسة جديدة..."
-          sleep 60  # دقيقة راحة
-          
-          echo "🔄 إرسال طلب لبدء جلسة جديدة..."
+          echo "⏳ استراحة دقيقة واحدة..."
+          sleep 60
           curl -X POST \
             -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             -H "Accept: application/vnd.github.v3+json" \
