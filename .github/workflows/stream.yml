@@ -14,14 +14,14 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable > /dev/null
           
-          # تشغيل محرك الصوت بضبط زمن استجابة سريع
+          # تشغيل محرك الصوت
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
           
           # إنشاء القنوات المستقلة
           pactl load-module module-null-sink sink_name=Sink1
           pactl load-module module-null-sink sink_name=Sink2
           
-          # ضبط جودة الصوت لضمان عدم وجود تأخير
+          # ضبط الأوصاف
           pacmd "update-sink-proplist Sink1 device.description=Stream1"
           pacmd "update-sink-proplist Sink2 device.description=Stream2"
 
@@ -40,7 +40,6 @@ jobs:
           from selenium.webdriver.chrome.options import Options
           from multiprocessing import Process
 
-          # --- إعدادات التحكم ---
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
 
           def get_control_data():
@@ -100,10 +99,8 @@ jobs:
                       target_url = config['url']
                       target_status = config['status']
 
-                      # --- حالة الإيقاف (0) ---
                       if target_status == "0":
                           if ffmpeg_process:
-                              print(f"🛑 إغلاق البث {stream_id}")
                               ffmpeg_process.terminate()
                               ffmpeg_process = None
                           if driver:
@@ -111,7 +108,6 @@ jobs:
                               driver = None
                           current_url = ""
 
-                      # --- حالة التشغيل (1) ---
                       elif target_status == "1":
                           if not target_url.lower().startswith("http"):
                               time.sleep(10)
@@ -127,16 +123,17 @@ jobs:
                                   driver.get(target_url)
                                   current_url = target_url
                                   time.sleep(10) 
-                                  driver.execute_script(\"\"\"
+                                  # تم تصحيح الجزء التالي (إزالة الباك سلاش)
+                                  driver.execute_script("""
                                       var style = document.createElement('style');
                                       style.innerHTML = 'body { background: black !important; overflow: hidden !important; }';
                                       document.head.appendChild(style);
                                       if(!window.moveInterval){
                                           window.moveInterval = setInterval(() => { window.scrollBy(0,1); window.scrollBy(0,-1); }, 50);
                                       }
-                                  \"\"\")
+                                  """)
                               except Exception as e:
-                                  print(f"⚠️ خطأ: {e}")
+                                  print(f"⚠️ Error loading page: {e}")
 
                           if ffmpeg_process is None:
                               print(f"📡 فتح اتصال RTMP للبث {stream_id}")
