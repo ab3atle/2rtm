@@ -2,10 +2,18 @@ name: Perpetual Dual Stream
 
 on:
   workflow_dispatch:
+  # هذا الحدث هو المسؤول عن بدء الجلسة الجديدة تلقائياً
+  repository_dispatch:
+    types: [restart-session]
 
 jobs:
   stream:
     runs-on: ubuntu-latest
+    # نمنح الأكشن صلاحية الكتابة لإعادة تشغيل نفسه
+    permissions:
+      actions: write
+      contents: read
+      
     steps:
       - uses: actions/checkout@v4
       
@@ -41,7 +49,7 @@ jobs:
           from multiprocessing import Process
 
           # --- إعدادات الوقت والتحكم ---
-          RUN_MINUTES = 1  # سيتم إغلاق الأكشن والبث بالكامل بعد هذا الوقت
+          RUN_MINUTES = 5  # مدة البث (5 دقائق)
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
 
           def get_driver_options(width, height):
@@ -119,7 +127,7 @@ jobs:
                       
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd, env=env_vars)
                       
-                      # الانتظار للمدة المحددة
+                      # الانتظار للمدة المحددة (5 دقائق)
                       time.sleep(RUN_MINUTES * 60)
                       
                       print(f"⏰ انتهى وقت البث {stream_id} ({RUN_MINUTES} دقيقة)")
@@ -132,22 +140,36 @@ jobs:
                   disp.stop()
 
           if __name__ == "__main__":
-              R1 = os.environ.get('R1')
-              R2 = os.environ.get('R2')
+              R1, R2 = os.environ.get('R1'), os.environ.get('R2')
               
-              p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
-              p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
-              
-              p1.start(); p2.start()
-              
-              # انتظار العمليات حتى تنتهي (مدة الدقيقة)
-              p1.join()
-              p2.join()
-              print("✅ تم إنهاء المهمة وفصل البثوث بنجاح.")
+              if R1 and R2:
+                  p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
+                  p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
+                  
+                  p1.start(); p2.start()
+                  
+                  # انتظار العمليات حتى تنتهي (بعد 5 دقائق)
+                  p1.join()
+                  p2.join()
+                  print("✅ تم إنهاء المهمة وفصل البثوث بنجاح.")
           EOF
 
-      - name: Start Streaming
+      - name: Run Streaming Script
         env:
           R1: ${{ secrets.R1 }}
           R2: ${{ secrets.R2 }}
         run: python main.py
+
+      # --- الخطوة السحرية: الانتظار وبدء جلسة جديدة ---
+      - name: Wait & Trigger New Session
+        if: always()  # لضمان التنفيذ دائماً
+        run: |
+          echo "⏳ استراحة لمدة دقيقة واحدة قبل بدء جلسة جديدة..."
+          sleep 60  # دقيقة راحة
+          
+          echo "🔄 إرسال طلب لبدء جلسة جديدة..."
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d '{"event_type": "restart-session"}'
