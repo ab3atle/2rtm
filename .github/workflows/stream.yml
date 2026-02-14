@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: streaming-group
-  cancel-in-progress: true  # تم التفعيل لإنهاء العمليات القديمة فوراً عند تشغيل جديد
+  cancel-in-progress: true 
 
 jobs:
   stream:
@@ -48,52 +48,33 @@ jobs:
           from selenium.webdriver.common.by import By
           from multiprocessing import Process
 
-          SWITCH_INTERVAL = 35 
+          # إعدادات ثابتة
+          SWITCH_INTERVAL = 35 * 60 # 35 دقيقة بالثواني
           URL1_CONTROL = "https://meja.do.am/asd/url1.txt"
           URL2_CONTROL = "https://meja.do.am/asd/url2.txt"
-          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwybUCY_k-nPM4NQ2_ejdPKIKD_PfOk3nlAuwB7Ysfg8N0PHggTgvH8u2XJI_dtir0P/exec"
-          # رابط فيديو النهاية أو التوقف
           FALLBACK_VIDEO = "https://archive.org/download/mrtroll-stream-ended-2026-v1/MrTroll_Stream_Video.mp4"
 
-          def get_url_from_file(control_url):
+          def get_active_url(control_url):
               try:
                   res = requests.get(f"{control_url}?t={int(time.time())}", timeout=5)
                   lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()]
                   for line in lines:
                       parts = line.split()
-                      # إذا كان الرقم 1 نعيد الرابط، إذا 0 سيعود None
                       if len(parts) >= 2 and parts[1] == "1":
                           return parts[0]
               except: pass
-              return None
+              return FALLBACK_VIDEO
 
-          # دالة الانتظار الذكية: تفحص الرابط، تخفي الماوس، وتنقر
-          def monitor_and_wait(driver, duration, control_url, current_url):
-              start_time = time.time()
-              check_interval = 5 # فحص كل 5 ثواني
-              
-              while time.time() - start_time < duration:
-                  try:
-                      # 1. إخفاء الماوس (حقن JS لضمان الاختفاء)
-                      driver.execute_script("document.body.style.cursor = 'none';")
-                      
-                      # 2. النقر للحفاظ على النشاط
-                      driver.find_element(By.TAG_NAME, 'body').click()
-                  except: pass
-                  
-                  # 3. الفحص الفوري للتعديلات في الملف النصي
-                  checked_url = get_url_from_file(control_url)
-                  
-                  # إذا كان الرابط الحالي هو فيديو التوقف وجاء رابط جديد -> كسر الانتظار للتحديث
-                  if current_url == FALLBACK_VIDEO and checked_url is not None:
-                      return True 
-                  # إذا كان الرابط الحالي رابط حقيقي واختلف عن الموجود (أو صار 0/None) -> كسر الانتظار
-                  if current_url != FALLBACK_VIDEO and checked_url != current_url:
-                      return True
-
-                  time.sleep(check_interval)
-              
-              return False # انتهى الوقت دون تغييرات
+          def hide_mouse_and_notify(driver):
+              try:
+                  # إخفاء الماوس عبر CSS
+                  script = """
+                  var style = document.createElement('style');
+                  style.innerHTML = '* { cursor: none !important; }';
+                  document.head.appendChild(style);
+                  """
+                  driver.execute_script(script)
+              except: pass
 
           def start_stream(rtmp_key, sink_name, control_url, initial_delay=0):
               if initial_delay > 0:
@@ -109,68 +90,56 @@ jobs:
               opts.add_argument('--kiosk')
               opts.add_argument('--autoplay-policy=no-user-gesture-required')
               opts.add_argument('--disable-dev-shm-usage')
-              # إخفاء إشعارات المتصفح
               opts.add_argument("--disable-notifications")
               opts.add_argument("--disable-infobars")
               
               driver = webdriver.Chrome(options=opts)
-              ffmpeg_proc = None
               
-              # بدء البث مرة واحدة (البث مستمر، المحتوى يتغير)
+              # تشغيل FFMPEG مرة واحدة فقط لضمان عدم التقطيع
               ffmpeg_cmd = [
-                  'ffmpeg', '-y', 
-                  '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
+                  'ffmpeg', '-y', '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
                   '-f', 'pulse', '-i', f"{sink_name}.monitor",
-                  '-c:v', 'libx264', 
-                  '-preset', 'ultrafast', 
-                  '-b:v', '3000k', 
-                  '-maxrate', '3000k', 
-                  '-bufsize', '6000k',
-                  '-g', '60',
-                  '-keyint_min', '60', 
-                  '-sc_threshold', '0',
-                  '-pix_fmt', 'yuv420p',
-                  '-c:a', 'aac', '-b:a', '128k',
+                  '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '2500k', 
+                  '-maxrate', '2500k', '-bufsize', '5000k', '-g', '60',
+                  '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k',
                   '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
               ]
+              ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
               
               try:
-                  ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
+                  last_url = ""
+                  start_time = time.time()
                   
-                  # حلقة لا نهائية للتحكم في المحتوى دون قطع البث
                   while True:
-                      target_url = get_url_from_file(control_url)
+                      current_target = get_active_url(control_url)
                       
-                      # تحديد الرابط: إما الرابط النشط أو فيديو التوقف
-                      if target_url:
-                          final_url = target_url
-                      else:
-                          final_url = FALLBACK_VIDEO
+                      # تحديث الصفحة فقط إذا تغير الرابط في الملف النصي
+                      if current_target != last_url:
+                          driver.get(current_target)
+                          time.sleep(2)
+                          hide_mouse_and_notify(driver)
+                          last_url = current_target
                       
+                      # النقر للحفاظ على النشاط وإخفاء الماوس دورياً
                       try:
-                          driver.get(final_url)
-                          time.sleep(5) # انتظار بسيط للتحميل
+                          driver.find_element(By.TAG_NAME, 'body').click()
+                          hide_mouse_and_notify(driver)
                       except: pass
-
-                      # الانتظار مع المراقبة المستمرة
-                      # إذا عادت الدالة True يعني حدث تغيير ويجب التحديث فوراً
-                      # إذا عادت False يعني انتهى الوقت الطبيعي (35 دقيقة) ونقوم بالتحديث أيضاً
-                      monitor_and_wait(driver, SWITCH_INTERVAL * 60, control_url, final_url)
                       
+                      # إذا مر 35 دقيقة، نعيد فحص الروابط (أو يمكن تركها للملف النصي فقط)
+                      if time.time() - start_time > SWITCH_INTERVAL:
+                          start_time = time.time() # Reset timer
+
+                      time.sleep(10) # فحص كل 10 ثوانٍ لتقليل الضغط
               finally:
-                  if ffmpeg_proc: ffmpeg_proc.terminate()
+                  ffmpeg_proc.terminate()
                   driver.quit()
                   disp.stop()
 
           if __name__ == "__main__":
-              try: requests.get(APPS_SCRIPT_URL, timeout=10)
-              except: pass
-
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              # تم تمرير رابط التحكم لكل عملية
               p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, 0))
               p2 = Process(target=start_stream, args=(R2, "Sink2", URL2_CONTROL, 60))
-              
               p1.start()
               p2.start()
               p1.join()
@@ -184,10 +153,9 @@ jobs:
         run: python main.py
 
       - name: Wait & Restart
-        # التعديل هنا: يعمل دائماً إلا إذا تم الإلغاء (Cancelled)
         if: always() && !cancelled()
         run: |
-          echo "⏳ فترة راحة..."
+          echo "⏳ Re-triggering..."
           sleep 300
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
