@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: streaming-group
-  cancel-in-progress: true 
+  cancel-in-progress: false
 
 jobs:
   stream:
@@ -48,33 +48,41 @@ jobs:
           from selenium.webdriver.common.by import By
           from multiprocessing import Process
 
-          # إعدادات ثابتة
-          SWITCH_INTERVAL = 35 * 60 # 35 دقيقة بالثواني
+          SWITCH_INTERVAL = 35 
           URL1_CONTROL = "https://meja.do.am/asd/url1.txt"
           URL2_CONTROL = "https://meja.do.am/asd/url2.txt"
+          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwybUCY_k-nPM4NQ2_ejdPKIKD_PfOk3nlAuwB7Ysfg8N0PHggTgvH8u2XJI_dtir0P/exec"
           FALLBACK_VIDEO = "https://archive.org/download/mrtroll-stream-ended-2026-v1/MrTroll_Stream_Video.mp4"
 
-          def get_active_url(control_url):
+          def get_url_from_file(control_url):
               try:
-                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=5)
+                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=10)
                   lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()]
                   for line in lines:
                       parts = line.split()
                       if len(parts) >= 2 and parts[1] == "1":
                           return parts[0]
               except: pass
-              return FALLBACK_VIDEO
+              return None
 
-          def hide_mouse_and_notify(driver):
-              try:
-                  # إخفاء الماوس عبر CSS
-                  script = """
-                  var style = document.createElement('style');
-                  style.innerHTML = '* { cursor: none !important; }';
-                  document.head.appendChild(style);
-                  """
-                  driver.execute_script(script)
-              except: pass
+          def active_wait(driver, duration, control_url, current_url):
+              start_time = time.time()
+              while time.time() - start_time < duration:
+                  try:
+                      # إخفاء الماوس والنقر للحفاظ على النشاط
+                      driver.execute_script("document.body.style.cursor = 'none';")
+                      driver.find_element(By.TAG_NAME, 'body').click()
+                  except: pass
+                  
+                  # فحص التحديث الفوري كل 5 ثواني
+                  new_check = get_url_from_file(control_url)
+                  if new_check != current_url: # إذا تغير الرابط أو صار 0 (None)
+                      return True # كسر الانتظار فوراً للتحديث
+                  
+                  remaining = duration - (time.time() - start_time)
+                  if remaining <= 0: break
+                  time.sleep(min(5, remaining))
+              return False
 
           def start_stream(rtmp_key, sink_name, control_url, initial_delay=0):
               if initial_delay > 0:
@@ -90,56 +98,48 @@ jobs:
               opts.add_argument('--kiosk')
               opts.add_argument('--autoplay-policy=no-user-gesture-required')
               opts.add_argument('--disable-dev-shm-usage')
-              opts.add_argument("--disable-notifications")
-              opts.add_argument("--disable-infobars")
-              
+              opts.add_argument("--disable-notifications") # إخفاء الإشعارات
+
               driver = webdriver.Chrome(options=opts)
-              
-              # تشغيل FFMPEG مرة واحدة فقط لضمان عدم التقطيع
-              ffmpeg_cmd = [
-                  'ffmpeg', '-y', '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
-                  '-f', 'pulse', '-i', f"{sink_name}.monitor",
-                  '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '2500k', 
-                  '-maxrate', '2500k', '-bufsize', '5000k', '-g', '60',
-                  '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k',
-                  '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
-              ]
-              ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
+              ffmpeg_proc = None
               
               try:
-                  last_url = ""
-                  start_time = time.time()
+                  # تشغيل FFMPEG بنفس إعدادات السلاسة الأصلية (GOP 60)
+                  ffmpeg_cmd = [
+                      'ffmpeg', '-y', 
+                      '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
+                      '-f', 'pulse', '-i', f"{sink_name}.monitor",
+                      '-c:v', 'libx264', '-preset', 'ultrafast', 
+                      '-b:v', '3000k', '-maxrate', '3000k', '-bufsize', '6000k',
+                      '-g', '60', '-keyint_min', '60', '-sc_threshold', '0', 
+                      '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', 
+                      '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
+                  ]
+                  ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
                   
                   while True:
-                      current_target = get_active_url(control_url)
+                      target_url = get_url_from_file(control_url)
+                      final_url = target_url if target_url else FALLBACK_VIDEO
                       
-                      # تحديث الصفحة فقط إذا تغير الرابط في الملف النصي
-                      if current_target != last_url:
-                          driver.get(current_target)
-                          time.sleep(2)
-                          hide_mouse_and_notify(driver)
-                          last_url = current_target
+                      driver.get(final_url)
+                      time.sleep(5)
                       
-                      # النقر للحفاظ على النشاط وإخفاء الماوس دورياً
-                      try:
-                          driver.find_element(By.TAG_NAME, 'body').click()
-                          hide_mouse_and_notify(driver)
-                      except: pass
+                      # الانتظار النشط مع مراقبة التغييرات الفورية في الملف
+                      active_wait(driver, SWITCH_INTERVAL * 60, control_url, target_url)
                       
-                      # إذا مر 35 دقيقة، نعيد فحص الروابط (أو يمكن تركها للملف النصي فقط)
-                      if time.time() - start_time > SWITCH_INTERVAL:
-                          start_time = time.time() # Reset timer
-
-                      time.sleep(10) # فحص كل 10 ثوانٍ لتقليل الضغط
               finally:
-                  ffmpeg_proc.terminate()
+                  if ffmpeg_proc: ffmpeg_proc.terminate()
                   driver.quit()
                   disp.stop()
 
           if __name__ == "__main__":
+              try: requests.get(APPS_SCRIPT_URL, timeout=10)
+              except: pass
+
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
               p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, 0))
               p2 = Process(target=start_stream, args=(R2, "Sink2", URL2_CONTROL, 60))
+              
               p1.start()
               p2.start()
               p1.join()
@@ -153,9 +153,9 @@ jobs:
         run: python main.py
 
       - name: Wait & Restart
-        if: always() && !cancelled()
+        if: always() && !cancelled() # ينتهي فوراً عند عمل Cancel للمهمة
         run: |
-          echo "⏳ Re-triggering..."
+          echo "⏳ فترة راحة..."
           sleep 300
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
