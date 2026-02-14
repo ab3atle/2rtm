@@ -47,7 +47,7 @@ jobs:
           from selenium.webdriver.chrome.options import Options
           from multiprocessing import Process
 
-          SWITCH_INTERVAL = 35 # وقت التبديل بالدقائق
+          SWITCH_INTERVAL = 35 
           URL1_CONTROL = "https://meja.do.am/asd/url1.txt"
           URL2_CONTROL = "https://meja.do.am/asd/url2.txt"
           APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw02chwlpOfzX6Mapw_sZwpERA0xwBEsu0sOnQFNHjPyQMo4CVoYKdmuApQIGqqi4id/exec"
@@ -64,7 +64,6 @@ jobs:
               return None
 
           def start_stream(rtmp_key, sink_name, initial_delay=0):
-              # الانتظار المطلوب قبل بدء البث (للبث الثاني فقط)
               if initial_delay > 0:
                   time.sleep(initial_delay)
               
@@ -83,28 +82,36 @@ jobs:
               ffmpeg_proc = None
               
               try:
-                  # المرحلة الأولى: استخدام URL1
                   target_url = get_url_from_file(URL1_CONTROL)
                   if target_url:
                       driver.get(target_url)
-                      time.sleep(5)
+                      time.sleep(10) # وقت إضافي للتحميل
+                      
+                      # تعديل الأوامر لإصلاح مشكلة الـ Keyframe و الـ GOP
                       ffmpeg_cmd = [
-                          'ffmpeg', '-y', '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
+                          'ffmpeg', '-y', 
+                          '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
                           '-f', 'pulse', '-i', f"{sink_name}.monitor",
-                          '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '3000k',
+                          '-c:v', 'libx264', 
+                          '-preset', 'ultrafast', 
+                          '-b:v', '3000k', 
+                          '-maxrate', '3000k', 
+                          '-bufsize', '6000k',
+                          '-g', '60', # مفتاح الحل: إطار رئيسي كل 60 إطار (كل ثانيتين)
+                          '-keyint_min', '60', 
+                          '-sc_threshold', '0', # منع تغيير الإطارات بناء على المشهد
+                          '-pix_fmt', 'yuv420p', # متوافق تماماً مع يوتيوب
+                          '-c:a', 'aac', '-b:a', '128k', # تحسين جودة الصوت
                           '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
                       
-                      # حساب وقت البقاء في الرابط الأول (35 دقيقة ناقص وقت التأخير الأولي)
                       sleep_time = max(0, (SWITCH_INTERVAL * 60) - initial_delay)
                       time.sleep(sleep_time)
                       
-                      # المرحلة الثانية: التبديل إلى URL2
                       new_url = get_url_from_file(URL2_CONTROL)
                       if new_url:
                           driver.get(new_url)
-                          # البقاء في الرابط الثاني لمدة 35 دقيقة أخرى
                           time.sleep(SWITCH_INTERVAL * 60)
               finally:
                   if ffmpeg_proc: ffmpeg_proc.terminate()
@@ -112,19 +119,15 @@ jobs:
                   disp.stop()
 
           if __name__ == "__main__":
-              # تنبيه Google Script
               try: requests.get(APPS_SCRIPT_URL, timeout=10)
               except: pass
 
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-
-              # تشغيل العمليتين
               p1 = Process(target=start_stream, args=(R1, "Sink1", 0))
-              p2 = Process(target=start_stream, args=(R2, "Sink2", 60)) # تأخير 60 ثانية للبث الثاني
+              p2 = Process(target=start_stream, args=(R2, "Sink2", 60))
               
               p1.start()
               p2.start()
-              
               p1.join()
               p2.join()
           EOF
@@ -138,8 +141,8 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          echo "⏳ فترة راحة 5 دقائق قبل الإعادة..."
-          sleep 600
+          echo "⏳ فترة راحة..."
+          sleep 300
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
             -H "Accept: application/vnd.github.v3+json" \
