@@ -50,7 +50,7 @@ jobs:
           SWITCH_INTERVAL = 35 
           URL1_CONTROL = "https://meja.do.am/asd/url1.txt"
           URL2_CONTROL = "https://meja.do.am/asd/url2.txt"
-          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw02chwlpOfzX6Mapw_sZwpERA0xwBEsu0sOnQFNHjPyQMo4CVoYKdmuApQIGqqi4id/exec"
+          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzJQ6anzkGGAQCkqknLsgYa_qYVW2S95HFCTgPnG-hfTvrpBkhU3IH4kC4aGN-665n_9g/exec"
 
           def get_url_from_file(control_url):
               try:
