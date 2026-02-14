@@ -49,7 +49,7 @@ jobs:
           from selenium.webdriver.chrome.options import Options
           from multiprocessing import Process
 
-          RUN_MINUTES = 5 
+          RUN_MINUTES = 65 
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
           APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw02chwlpOfzX6Mapw_sZwpERA0xwBEsu0sOnQFNHjPyQMo4CVoYKdmuApQIGqqi4id/exec"
 
@@ -117,7 +117,7 @@ jobs:
         if: always()
         run: |
           echo "⏳ فترة راحة 5 دقائق..."
-          sleep 300
+          sleep 600
           echo "🔄 طلب جلسة جديدة..."
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
