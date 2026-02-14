@@ -104,7 +104,7 @@ jobs:
         if: always()
         run: |
           echo "⏳ فترة راحة دقيقة واحدة..."
-          sleep 60
+          sleep 300
           echo "🔄 طلب جلسة جديدة..."
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
