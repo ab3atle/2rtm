@@ -51,6 +51,7 @@ jobs:
 
           RUN_MINUTES = 5 
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
+          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbw02chwlpOfzX6Mapw_sZwpERA0xwBEsu0sOnQFNHjPyQMo4CVoYKdmuApQIGqqi4id/exec"
 
           def start_stream(stream_id, rtmp_key, sink_name):
               width, height = 720, 1280
@@ -87,6 +88,18 @@ jobs:
                   disp.stop()
 
           if __name__ == "__main__":
+              # 1. طلب رابط النشر لجدولة البث
+              print("🚀 طلب جدولة البث من Google Apps Script...")
+              try:
+                  requests.get(APPS_SCRIPT_URL, timeout=30)
+              except:
+                  print("⚠️ حدث تنبيه بسيط عند الاتصال بالرابط.")
+
+              # 2. الانتظار لمدة دقيقتين قبل الانطلاق
+              print("⏳ الانتظار لمدة 120 ثانية (دقيقتين)...")
+              time.sleep(120)
+
+              # 3. تشغيل البث
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
               p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
               p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
@@ -103,7 +116,7 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          echo "⏳ فترة راحة دقيقة واحدة..."
+          echo "⏳ فترة راحة 5 دقائق..."
           sleep 300
           echo "🔄 طلب جلسة جديدة..."
           curl -X POST \
