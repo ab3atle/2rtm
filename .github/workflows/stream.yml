@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: streaming-group
-  cancel-in-progress: false
+  cancel-in-progress: true  # تم التفعيل لإنهاء العمليات القديمة فوراً عند تشغيل جديد
 
 jobs:
   stream:
@@ -52,36 +52,50 @@ jobs:
           URL1_CONTROL = "https://meja.do.am/asd/url1.txt"
           URL2_CONTROL = "https://meja.do.am/asd/url2.txt"
           APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwybUCY_k-nPM4NQ2_ejdPKIKD_PfOk3nlAuwB7Ysfg8N0PHggTgvH8u2XJI_dtir0P/exec"
+          # رابط فيديو النهاية أو التوقف
+          FALLBACK_VIDEO = "https://archive.org/download/mrtroll-stream-ended-2026-v1/MrTroll_Stream_Video.mp4"
 
           def get_url_from_file(control_url):
               try:
-                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=10)
+                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=5)
                   lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()]
                   for line in lines:
                       parts = line.split()
+                      # إذا كان الرقم 1 نعيد الرابط، إذا 0 سيعود None
                       if len(parts) >= 2 and parts[1] == "1":
                           return parts[0]
               except: pass
               return None
 
-          # دالة جديدة للانتظار مع النقر كل 30 ثانية
-          def active_wait(driver, duration):
+          # دالة الانتظار الذكية: تفحص الرابط، تخفي الماوس، وتنقر
+          def monitor_and_wait(driver, duration, control_url, current_url):
               start_time = time.time()
+              check_interval = 5 # فحص كل 5 ثواني
+              
               while time.time() - start_time < duration:
                   try:
-                      # النقر على الشاشة لتفعيل الصوت أو التفاعل
+                      # 1. إخفاء الماوس (حقن JS لضمان الاختفاء)
+                      driver.execute_script("document.body.style.cursor = 'none';")
+                      
+                      # 2. النقر للحفاظ على النشاط
                       driver.find_element(By.TAG_NAME, 'body').click()
-                  except:
-                      pass
+                  except: pass
                   
-                  # حساب الوقت المتبقي
-                  remaining = duration - (time.time() - start_time)
-                  if remaining <= 0: break
+                  # 3. الفحص الفوري للتعديلات في الملف النصي
+                  checked_url = get_url_from_file(control_url)
                   
-                  # الانتظار لمدة 30 ثانية أو الوقت المتبقي أيهما أقل
-                  time.sleep(min(30, remaining))
+                  # إذا كان الرابط الحالي هو فيديو التوقف وجاء رابط جديد -> كسر الانتظار للتحديث
+                  if current_url == FALLBACK_VIDEO and checked_url is not None:
+                      return True 
+                  # إذا كان الرابط الحالي رابط حقيقي واختلف عن الموجود (أو صار 0/None) -> كسر الانتظار
+                  if current_url != FALLBACK_VIDEO and checked_url != current_url:
+                      return True
 
-          def start_stream(rtmp_key, sink_name, initial_delay=0):
+                  time.sleep(check_interval)
+              
+              return False # انتهى الوقت دون تغييرات
+
+          def start_stream(rtmp_key, sink_name, control_url, initial_delay=0):
               if initial_delay > 0:
                   time.sleep(initial_delay)
               
@@ -95,44 +109,54 @@ jobs:
               opts.add_argument('--kiosk')
               opts.add_argument('--autoplay-policy=no-user-gesture-required')
               opts.add_argument('--disable-dev-shm-usage')
+              # إخفاء إشعارات المتصفح
+              opts.add_argument("--disable-notifications")
+              opts.add_argument("--disable-infobars")
               
               driver = webdriver.Chrome(options=opts)
               ffmpeg_proc = None
               
+              # بدء البث مرة واحدة (البث مستمر، المحتوى يتغير)
+              ffmpeg_cmd = [
+                  'ffmpeg', '-y', 
+                  '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
+                  '-f', 'pulse', '-i', f"{sink_name}.monitor",
+                  '-c:v', 'libx264', 
+                  '-preset', 'ultrafast', 
+                  '-b:v', '3000k', 
+                  '-maxrate', '3000k', 
+                  '-bufsize', '6000k',
+                  '-g', '60',
+                  '-keyint_min', '60', 
+                  '-sc_threshold', '0',
+                  '-pix_fmt', 'yuv420p',
+                  '-c:a', 'aac', '-b:a', '128k',
+                  '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
+              ]
+              
               try:
-                  target_url = get_url_from_file(URL1_CONTROL)
-                  if target_url:
-                      driver.get(target_url)
-                      time.sleep(10) # وقت إضافي للتحميل
+                  ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
+                  
+                  # حلقة لا نهائية للتحكم في المحتوى دون قطع البث
+                  while True:
+                      target_url = get_url_from_file(control_url)
                       
-                      # تعديل الأوامر لإصلاح مشكلة الـ Keyframe و الـ GOP
-                      ffmpeg_cmd = [
-                          'ffmpeg', '-y', 
-                          '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
-                          '-f', 'pulse', '-i', f"{sink_name}.monitor",
-                          '-c:v', 'libx264', 
-                          '-preset', 'ultrafast', 
-                          '-b:v', '3000k', 
-                          '-maxrate', '3000k', 
-                          '-bufsize', '6000k',
-                          '-g', '60', # مفتاح الحل: إطار رئيسي كل 60 إطار (كل ثانيتين)
-                          '-keyint_min', '60', 
-                          '-sc_threshold', '0', # منع تغيير الإطارات بناء على المشهد
-                          '-pix_fmt', 'yuv420p', # متوافق تماماً مع يوتيوب
-                          '-c:a', 'aac', '-b:a', '128k', # تحسين جودة الصوت
-                          '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
-                      ]
-                      ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
+                      # تحديد الرابط: إما الرابط النشط أو فيديو التوقف
+                      if target_url:
+                          final_url = target_url
+                      else:
+                          final_url = FALLBACK_VIDEO
                       
-                      sleep_time = max(0, (SWITCH_INTERVAL * 60) - initial_delay)
-                      # استبدال الانتظار العادي بالانتظار النشط (مع النقر)
-                      active_wait(driver, sleep_time)
+                      try:
+                          driver.get(final_url)
+                          time.sleep(5) # انتظار بسيط للتحميل
+                      except: pass
+
+                      # الانتظار مع المراقبة المستمرة
+                      # إذا عادت الدالة True يعني حدث تغيير ويجب التحديث فوراً
+                      # إذا عادت False يعني انتهى الوقت الطبيعي (35 دقيقة) ونقوم بالتحديث أيضاً
+                      monitor_and_wait(driver, SWITCH_INTERVAL * 60, control_url, final_url)
                       
-                      new_url = get_url_from_file(URL2_CONTROL)
-                      if new_url:
-                          driver.get(new_url)
-                          # استبدال الانتظار العادي بالانتظار النشط (مع النقر)
-                          active_wait(driver, SWITCH_INTERVAL * 60)
               finally:
                   if ffmpeg_proc: ffmpeg_proc.terminate()
                   driver.quit()
@@ -143,8 +167,9 @@ jobs:
               except: pass
 
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              p1 = Process(target=start_stream, args=(R1, "Sink1", 0))
-              p2 = Process(target=start_stream, args=(R2, "Sink2", 60))
+              # تم تمرير رابط التحكم لكل عملية
+              p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, 0))
+              p2 = Process(target=start_stream, args=(R2, "Sink2", URL2_CONTROL, 60))
               
               p1.start()
               p2.start()
@@ -159,7 +184,8 @@ jobs:
         run: python main.py
 
       - name: Wait & Restart
-        if: always()
+        # التعديل هنا: يعمل دائماً إلا إذا تم الإلغاء (Cancelled)
+        if: always() && !cancelled()
         run: |
           echo "⏳ فترة راحة..."
           sleep 300
