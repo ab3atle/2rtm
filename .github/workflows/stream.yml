@@ -5,23 +5,29 @@ on:
   repository_dispatch:
     types: [restart-session]
 
+# 👇 هذا الجزء يمنع تداخل الجلسات (يسمح بواحدة فقط في نفس الوقت)
+concurrency:
+  group: streaming-group
+  cancel-in-progress: false # نجعله false لكي لا يقتل البث الحالي، بل يمنع الجديد من البدء قبل انتهاء القديم
+
 jobs:
   stream:
     runs-on: ubuntu-latest
     permissions:
       actions: write
-      contents: write # قمت بتغييرها لـ write لتتوافق مع الإعدادات التي ستفعلها
+      contents: write
       
     steps:
       - uses: actions/checkout@v4
 
+      # 👇 تنظيف السجلات القديمة جداً قبل البدء
       - name: 🧹 Delete Old Logs
         uses: Mattraks/delete-workflow-runs@v2
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}
           retain_days: 0
-          keep_minimum_runs: 2
+          keep_minimum_runs: 1 # احتفظ فقط بآخر سجل واحد بنجاح
 
       - name: System Setup
         run: |
@@ -30,8 +36,6 @@ jobs:
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
           pactl load-module module-null-sink sink_name=Sink1
           pactl load-module module-null-sink sink_name=Sink2
-          pacmd "update-sink-proplist Sink1 device.description=Stream1"
-          pacmd "update-sink-proplist Sink2 device.description=Stream2"
 
       - name: Python Setup
         run: pip install selenium pyvirtualdisplay requests
@@ -48,53 +52,46 @@ jobs:
           RUN_MINUTES = 5 
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
 
-          def get_driver_options(width, height):
-              opts = Options()
-              opts.add_argument('--no-sandbox')
-              opts.add_argument('--disable-dev-shm-usage')
-              opts.add_argument('--disable-gpu')
-              opts.add_argument(f'--window-size={width},{height}')
-              opts.add_argument('--kiosk')
-              opts.add_argument('--autoplay-policy=no-user-gesture-required')
-              opts.add_argument('--incognito')
-              return opts
-
-          def start_stream(stream_id, rtmp_key, sink_name, width=720, height=1280):
+          def start_stream(stream_id, rtmp_key, sink_name):
+              width, height = 720, 1280
               os.environ['PULSE_SINK'] = sink_name
-              env_vars = os.environ.copy()
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
-              env_vars['DISPLAY'] = f":{disp.display}"
+              
+              opts = Options()
+              opts.add_argument('--no-sandbox')
+              opts.add_argument('--kiosk')
+              opts.add_argument('--autoplay-policy=no-user-gesture-required')
+              
+              driver = webdriver.Chrome(options=opts)
               try:
-                  response = requests.get(f"{CONTROL_URL}?t={int(time.time())}", timeout=10)
-                  lines = [line.strip() for line in response.text.strip().split('\n') if line.strip()]
+                  res = requests.get(f"{CONTROL_URL}?t={int(time.time())}")
+                  lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()]
                   if len(lines) < stream_id: return
+                  
                   config = lines[stream_id-1].split()
                   if config[1] == "1":
-                      driver = webdriver.Chrome(options=get_driver_options(width, height))
                       driver.get(config[0])
                       time.sleep(10)
-                      driver.execute_script("document.body.style.overflow = 'hidden';")
                       ffmpeg_cmd = [
                           'ffmpeg', '-y', '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
                           '-f', 'pulse', '-i', f"{sink_name}.monitor",
-                          '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '3500k',
+                          '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '3000k',
                           '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
-                      proc = subprocess.Popen(ffmpeg_cmd, env=env_vars)
-                      time.sleep(RUN_MINUTES * 300)
+                      proc = subprocess.Popen(ffmpeg_cmd)
+                      time.sleep(RUN_MINUTES * 60)
                       proc.terminate()
-                      driver.quit()
               finally:
+                  driver.quit()
                   disp.stop()
 
           if __name__ == "__main__":
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              if R1 and R2:
-                  p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
-                  p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
-                  p1.start(); p2.start()
-                  p1.join(); p2.join()
+              p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
+              p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
+              p1.start(); p2.start()
+              p1.join(); p2.join()
           EOF
 
       - name: Run Streaming Script
@@ -106,9 +103,9 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          echo "⏳ استراحة دقيقة واحدة..."
+          echo "⏳ فترة راحة دقيقة واحدة..."
           sleep 60
-          # تم تغيير التوكن هنا ليعمل مع إعدادات الريبو مباشرة
+          echo "🔄 طلب جلسة جديدة..."
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
             -H "Accept: application/vnd.github.v3+json" \
