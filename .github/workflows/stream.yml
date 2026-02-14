@@ -14,16 +14,16 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable > /dev/null
           
-          # تشغيل محرك الصوت
+          # تشغيل محرك الصوت وضمان استمراريته
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
           
-          # إنشاء القنوات المستقلة
+          # إنشاء القنوات المستقلة (Sinks) لعزل الصوت
           pactl load-module module-null-sink sink_name=Sink1
           pactl load-module module-null-sink sink_name=Sink2
           
-          # ضبط الأوصاف
-          pacmd "update-sink-proplist Sink1 device.description=Stream1"
-          pacmd "update-sink-proplist Sink2 device.description=Stream2"
+          # تسمية القنوات للتنظيم
+          pacmd "update-sink-proplist Sink1 device.description=Stream1_Audio"
+          pacmd "update-sink-proplist Sink2 device.description=Stream2_Audio"
 
       - name: Python Setup
         run: pip install selenium pyvirtualdisplay requests
@@ -40,6 +40,7 @@ jobs:
           from selenium.webdriver.chrome.options import Options
           from multiprocessing import Process
 
+          # --- إعدادات التحكم ---
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
 
           def get_control_data():
@@ -62,24 +63,21 @@ jobs:
               opts.add_argument('--disable-dev-shm-usage')
               opts.add_argument('--disable-gpu')
               opts.add_argument(f'--window-size={width},{height}')
-              opts.add_argument('--window-position=0,0')
-              opts.add_argument('--kiosk')
-              opts.add_argument('--force-device-scale-factor=1')
               opts.add_argument('--autoplay-policy=no-user-gesture-required')
               opts.add_argument('--incognito')
-              opts.add_argument('--disable-cache')
+              opts.add_argument('--kiosk')
               opts.add_argument('--disable-blink-features=AutomationControlled')
               opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-              opts.add_experimental_option('useAutomationExtension', False)
               return opts
 
           def start_stream(stream_id, rtmp_key, sink_name, width=720, height=1280):
-              print(f"🟢 مراقب البث {stream_id} نشط الآن...")
+              print(f"🟢 [Stream {stream_id}] بدأت العملية لقناة الصوت: {sink_name}")
               
+              # فرض استخدام قناة الصوت المحددة لهذه العملية فقط
+              os.environ['PULSE_SINK'] = sink_name
               env_vars = os.environ.copy()
-              env_vars['PULSE_SINK'] = sink_name
-              env_vars['PULSE_LATENCY_MSEC'] = '20'
 
+              # إعداد الشاشة الوهمية
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
               env_vars['DISPLAY'] = f":{disp.display}"
@@ -99,6 +97,7 @@ jobs:
                       target_url = config['url']
                       target_status = config['status']
 
+                      # حالة الإيقاف
                       if target_status == "0":
                           if ffmpeg_process:
                               ffmpeg_process.terminate()
@@ -108,62 +107,62 @@ jobs:
                               driver = None
                           current_url = ""
 
+                      # حالة التشغيل
                       elif target_status == "1":
                           if not target_url.lower().startswith("http"):
-                              time.sleep(10)
+                              time.sleep(5)
                               continue
 
+                          # تشغيل المتصفح مع التأكد من عزل الصوت
                           if driver is None:
                               driver = webdriver.Chrome(options=get_driver_options(width, height))
 
                           if target_url != current_url:
-                              print(f"🔄 جاري تحميل: {target_url} للبث {stream_id}")
-                              try:
-                                  driver.delete_all_cookies()
-                                  driver.get(target_url)
-                                  current_url = target_url
-                                  time.sleep(10) 
-                                  # تم تصحيح الجزء التالي (إزالة الباك سلاش)
-                                  driver.execute_script("""
-                                      var style = document.createElement('style');
-                                      style.innerHTML = 'body { background: black !important; overflow: hidden !important; }';
-                                      document.head.appendChild(style);
-                                      if(!window.moveInterval){
-                                          window.moveInterval = setInterval(() => { window.scrollBy(0,1); window.scrollBy(0,-1); }, 50);
-                                      }
-                                  """)
-                              except Exception as e:
-                                  print(f"⚠️ Error loading page: {e}")
+                              print(f"🔄 [Stream {stream_id}] تغيير الرابط إلى: {target_url}")
+                              driver.get(target_url)
+                              current_url = target_url
+                              time.sleep(5)
+                              driver.execute_script("""
+                                  var style = document.createElement('style');
+                                  style.innerHTML = 'body { background: black !important; overflow: hidden !important; }';
+                                  document.head.appendChild(style);
+                              """)
 
+                          # تشغيل FFmpeg ليسحب من monitor القناة المخصصة فقط
                           if ffmpeg_process is None:
-                              print(f"📡 فتح اتصال RTMP للبث {stream_id}")
+                              print(f"📡 [Stream {stream_id}] تشغيل البث عبر {sink_name}")
                               ffmpeg_cmd = [
-                                  'ffmpeg', '-y', '-thread_queue_size', '4096',
+                                  'ffmpeg', '-y', '-thread_queue_size', '1024',
                                   '-f', 'x11grab', '-draw_mouse', '0', '-framerate', '30',
                                   '-video_size', f'{width}x{height}', '-i', f":{disp.display}",
-                                  '-f', 'pulse', '-thread_queue_size', '4096', '-i', f"{sink_name}.monitor",
-                                  '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-                                  '-b:v', '3500k', '-maxrate', '3500k', '-bufsize', '7000k',
-                                  '-pix_fmt', 'yuv420p', '-g', '60',
-                                  '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
-                                  '-af', 'aresample=async=1', '-vsync', '1',
+                                  '-f', 'pulse', '-i', f"{sink_name}.monitor",
+                                  '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '3000k',
+                                  '-g', '60', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
                                   '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                               ]
                               ffmpeg_process = subprocess.Popen(ffmpeg_cmd, env=env_vars)
 
                       time.sleep(10)
+              except Exception as e:
+                  print(f"❌ [Stream {stream_id}] Error: {e}")
               finally:
                   if ffmpeg_process: ffmpeg_process.terminate()
                   if driver: driver.quit()
                   disp.stop()
 
           if __name__ == "__main__":
-              R1, R2 = os.environ.get('R1'), os.environ.get('R2')
+              R1 = os.environ.get('R1')
+              R2 = os.environ.get('R2')
+              
               if R1 and R2:
                   p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
                   p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
-                  p1.start(); p2.start()
-                  p1.join(); p2.join()
+                  
+                  p1.start()
+                  p2.start()
+                  
+                  p1.join()
+                  p2.join()
           EOF
 
       - name: Start Streaming
