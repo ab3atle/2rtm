@@ -2,6 +2,7 @@ name: Perpetual Dual Stream
 
 on:
   workflow_dispatch:
+  # يمكنك إضافة جدولة زمنية هنا إذا أردت تشغيله تلقائياً كل فترة
 
 jobs:
   stream:
@@ -32,96 +33,60 @@ jobs:
           from selenium.webdriver.chrome.options import Options
           from multiprocessing import Process
 
-          # ==========================================
-          # إعدادات التحكم في الوقت (بالدقائق)
-          # ==========================================
-          ON_MINUTES = 1   # مدة البث (غيرها لـ 60 لاحقاً)
-          OFF_MINUTES = 1  # مدة التوقف (غيرها لـ 60 لاحقاً)
-          # ==========================================
-
+          # --- إعدادات الاختبار ---
+          RUN_MINUTES = 1  # سيتم إغلاق الأكشن بالكامل بعد هذه الدقيقة
+          
           CONTROL_URL = "https://meja.do.am/asd/url2.txt"
-
-          def get_control_data():
-              try:
-                  response = requests.get(f"{CONTROL_URL}?t={int(time.time())}", timeout=5)
-                  if response.status_code == 200:
-                      lines = [line.strip() for line in response.text.strip().split('\n') if line.strip()]
-                      results = []
-                      for line in lines:
-                          parts = line.split()
-                          if len(parts) >= 2:
-                              results.append({"url": parts[0].strip(), "status": parts[1].strip()})
-                      return results
-              except: pass
-              return None
-
-          def get_driver_options(width, height):
-              opts = Options()
-              opts.add_argument('--no-sandbox')
-              opts.add_argument('--disable-dev-shm-usage')
-              opts.add_argument('--disable-gpu')
-              opts.add_argument(f'--window-size={width},{height}')
-              opts.add_argument('--autoplay-policy=no-user-gesture-required')
-              opts.add_argument('--incognito')
-              return opts
 
           def start_stream(stream_id, rtmp_key, sink_name):
               width, height = 720, 1280
               os.environ['PULSE_SINK'] = sink_name
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
-              
               env_vars = os.environ.copy()
               env_vars['DISPLAY'] = f":{disp.display}"
               
-              driver = None
-              ffmpeg_process = None
-              
               try:
-                  controls = get_control_data()
-                  if not controls or len(controls) < stream_id: return
+                  response = requests.get(f"{CONTROL_URL}?t={int(time.time())}")
+                  lines = response.text.strip().split('\n')
+                  config = lines[stream_id-1].split()
                   
-                  config = controls[stream_id-1]
-                  if config['status'] == "1":
-                      driver = webdriver.Chrome(options=get_driver_options(width, height))
-                      driver.get(config['url'])
-                      time.sleep(10) # وقت لتحميل الموقع
+                  if config[1] == "1":
+                      opts = Options()
+                      opts.add_argument('--no-sandbox')
+                      opts.add_argument('--incognito')
+                      driver = webdriver.Chrome(options=opts)
+                      driver.get(config[0])
                       
                       ffmpeg_cmd = [
                           'ffmpeg', '-y', '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
                           '-f', 'pulse', '-i', f"{sink_name}.monitor",
                           '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '3000k',
-                          '-g', '60', '-c:a', 'aac', '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
+                          '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
-                      ffmpeg_process = subprocess.Popen(ffmpeg_cmd, env=env_vars)
-                      ffmpeg_process.wait() 
+                      subprocess.Popen(ffmpeg_cmd, env=env_vars)
+                      
+                      # انتظر الدقيقة المحددة ثم اخرج
+                      time.sleep(RUN_MINUTES * 60)
+                      print(f"⏰ انتهى وقت البث ({RUN_MINUTES} دقيقة). جاري الإغلاق...")
               finally:
-                  if ffmpeg_process: ffmpeg_process.terminate()
-                  if driver: driver.quit()
-                  disp.stop()
+                  # سيتم إغلاق كل شيء هنا تلقائياً عند انتهاء الدقيقة
+                  pass
 
           if __name__ == "__main__":
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
+              p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
+              p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
               
-              run_seconds = ON_MINUTES * 60
-              wait_seconds = OFF_MINUTES * 60
-
-              while True:
-                  print(f"🚀 بدء دورة التشغيل لمدة {ON_MINUTES} دقيقة...")
-                  p1 = Process(target=start_stream, args=(1, R1, "Sink1"))
-                  p2 = Process(target=start_stream, args=(2, R2, "Sink2"))
-                  
-                  p1.start(); p2.start()
-                  
-                  # البقاء قيد التشغيل للمدة المحددة
-                  time.sleep(run_seconds)
-                  
-                  print(f"🛑 إيقاف البث الآن. استراحة لمدة {OFF_MINUTES} دقيقة...")
-                  p1.terminate(); p2.terminate()
-                  p1.join(); p2.join()
-                  
-                  # الانتظار قبل الدورة القادمة
-                  time.sleep(wait_seconds)
+              p1.start(); p2.start()
+              
+              # ننتظر العمليات تنتهي (بعد دقيقة)
+              p1.join(timeout=RUN_MINUTES * 60 + 10)
+              p2.join(timeout=RUN_MINUTES * 60 + 10)
+              
+              # إنهاء العمليات قسرياً للتأكد من قفل البث
+              p1.terminate(); p2.terminate()
+              print("✅ تم إنهاء الجلسة بنجاح.")
           EOF
 
       - name: Start Streaming
