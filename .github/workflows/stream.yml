@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: streaming-group
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   stream:
@@ -54,14 +54,14 @@ jobs:
           APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwybUCY_k-nPM4NQ2_ejdPKIKD_PfOk3nlAuwB7Ysfg8N0PHggTgvH8u2XJI_dtir0P/exec"
 
           def kill_all(signum, frame):
-              sys.exit(0)
+              os._exit(0)
 
           signal.signal(signal.SIGTERM, kill_all)
           signal.signal(signal.SIGINT, kill_all)
 
           def get_url_from_file(control_url):
               try:
-                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=10)
+                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=5)
                   lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()]
                   for line in lines:
                       parts = line.split()
@@ -84,10 +84,16 @@ jobs:
                   if control_url:
                       new_url = get_url_from_file(control_url)
                       if new_url and new_url != last_url:
+                          # مسح كامل بيانات المتصفح
+                          driver.delete_all_cookies()
+                          driver.execute_script("window.localStorage.clear();")
+                          driver.execute_script("window.sessionStorage.clear();")
+                          driver.execute_cdp_cmd('Network.clearBrowserCache', {})
+                          driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
                           driver.get(new_url)
                           last_url = new_url
 
-                  time.sleep(5)
+                  time.sleep(3)
 
           def start_stream(rtmp_key, sink_name, initial_delay=0):
               if initial_delay > 0:
@@ -100,29 +106,27 @@ jobs:
 
               subprocess.Popen(['unclutter', '-idle', '0'])
 
-              opts = Options()
-              opts.add_argument('--no-sandbox')
-              opts.add_argument('--kiosk')
-              opts.add_argument('--autoplay-policy=no-user-gesture-required')
-              opts.add_argument('--disable-dev-shm-usage')
-              opts.add_argument('--disable-notifications')
-              opts.add_argument('--disable-infobars')
-              opts.add_argument('--disable-extensions')
-              opts.add_argument('--disable-popup-blocking')
-              opts.add_argument('--disable-features=TranslateUI')
-              opts.add_argument('--disable-blink-features=AutomationControlled')
-              opts.add_argument('--hide-scrollbars')
-              opts.add_argument('--cursor=none')
-
-              driver = webdriver.Chrome(options=opts)
               ffmpeg_proc = None
 
               try:
                   target_url = get_url_from_file(URL1_CONTROL)
                   if target_url:
-                      driver.get(target_url)
-                      time.sleep(10)
-                      
+                      opts = Options()
+                      opts.add_argument('--no-sandbox')
+                      opts.add_argument('--disable-dev-shm-usage')
+                      opts.add_argument('--autoplay-policy=no-user-gesture-required')
+                      opts.add_argument('--disable-notifications')
+                      opts.add_argument('--disable-infobars')
+                      opts.add_argument('--disable-extensions')
+                      opts.add_argument('--disable-popup-blocking')
+                      opts.add_argument('--disable-features=TranslateUI')
+                      opts.add_argument('--disable-blink-features=AutomationControlled')
+                      opts.add_argument('--hide-scrollbars')
+                      opts.add_argument(f'--app={target_url}')
+
+                      driver = webdriver.Chrome(options=opts)
+                      time.sleep(8)
+
                       ffmpeg_cmd = [
                           'ffmpeg', '-y',
                           '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}",
@@ -140,20 +144,23 @@ jobs:
                           '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
-                      
+
                       sleep_time = max(0, (SWITCH_INTERVAL * 60) - initial_delay)
                       active_wait(driver, sleep_time, URL1_CONTROL)
-                      
                       active_wait(driver, SWITCH_INTERVAL * 60, URL2_CONTROL)
+
               finally:
                   if ffmpeg_proc:
-                      ffmpeg_proc.terminate()
-                  driver.quit()
+                      ffmpeg_proc.kill()
+                  try:
+                      driver.quit()
+                  except:
+                      pass
                   disp.stop()
 
           if __name__ == "__main__":
               try:
-                  requests.get(APPS_SCRIPT_URL, timeout=10)
+                  requests.get(APPS_SCRIPT_URL, timeout=5)
               except:
                   pass
 
@@ -176,7 +183,6 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          echo "⏳ فترة راحة..."
           sleep 300
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
