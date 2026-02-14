@@ -82,7 +82,7 @@ jobs:
                           '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
                       proc = subprocess.Popen(ffmpeg_cmd, env=env_vars)
-                      time.sleep(RUN_MINUTES * 60)
+                      time.sleep(RUN_MINUTES * 300)
                       proc.terminate()
                       driver.quit()
               finally:
