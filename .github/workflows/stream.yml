@@ -110,7 +110,11 @@ jobs:
                       opts.add_argument('--disable-extensions')
                       opts.add_argument('--disable-popup-blocking')
                       opts.add_argument('--disable-features=TranslateUI')
+                      # إخفاء رسالة التحكم الآلي (Automated)
+                      opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+                      opts.add_experimental_option('useAutomationExtension', False)
                       opts.add_argument('--disable-blink-features=AutomationControlled')
+                      
                       opts.add_argument('--hide-scrollbars')
                       opts.add_argument(f'--app={target_url}')
 
@@ -174,7 +178,6 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          # استخدام انتظار قابل للإلغاء
           python - <<'PYTHON'
           import time, signal, sys
 
