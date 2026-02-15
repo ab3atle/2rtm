@@ -174,7 +174,26 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          sleep 300
+          # استخدام انتظار قابل للإلغاء
+          python - <<'PYTHON'
+import time, signal, sys
+
+stop = False
+def handler(signum, frame):
+    global stop
+    stop = True
+
+signal.signal(signal.SIGTERM, handler)
+signal.signal(signal.SIGINT, handler)
+
+wait_seconds = 300
+interval = 1
+for _ in range(0, wait_seconds, interval):
+    if stop:
+        sys.exit(0)
+    time.sleep(interval)
+PYTHON
+
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
             -H "Accept: application/vnd.github.v3+json" \
