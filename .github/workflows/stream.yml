@@ -144,7 +144,7 @@ jobs:
                       ]
 
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
-                      active_wait(driver, 9999999, URL1_CONTROL)
+                      active_wait(driver, 3600, URL1_CONTROL)
               finally:
                   if ffmpeg_proc:
                       ffmpeg_proc.kill()
@@ -189,7 +189,7 @@ jobs:
           signal.signal(signal.SIGTERM, handler)
           signal.signal(signal.SIGINT, handler)
 
-          wait_seconds = 900
+          wait_seconds = 10
           interval = 1
           for _ in range(0, wait_seconds, interval):
               if stop:
