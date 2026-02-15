@@ -1,1 +1,182 @@
-name: Perpetual Dual Stream on: workflow_dispatch: repository_dispatch: types: [restart-session] concurrency: group: streaming-group cancel-in-progress: true jobs: stream: runs-on: ubuntu-latest permissions: actions: write contents: write steps: - uses: actions/checkout@v4 - name: 🧹 Delete Old Logs uses: Mattraks/delete-workflow-runs@v2 with: token: ${{ github.token }} repository: ${{ github.repository }} retain_days: 0 keep_minimum_runs: 1 - name: System Setup run: | sudo apt-get update -qq sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable unclutter > /dev/null pulseaudio -D --exit-idle-time=-1 --disallow-exit || true pactl load-module module-null-sink sink_name=Sink1 pactl load-module module-null-sink sink_name=Sink2 - name: Python Setup run: pip install selenium pyvirtualdisplay requests - name: Create Python Script run: | cat << 'EOF' > main.py import os, subprocess, time, requests, signal from pyvirtualdisplay import Display from selenium import webdriver from selenium.webdriver.chrome.options import Options from selenium.webdriver.common.by import By from multiprocessing import Process URL1_CONTROL = "https://meja.do.am/asd/url1.txt" APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx1ObzRZDim5C3jpP0RuxDvJOxPeNinCJCdLxSODm-u3027srdSqjxwGk7kaDsy6HqOZg/exec" def kill_all(signum, frame): os._exit(0) signal.signal(signal.SIGTERM, kill_all) signal.signal(signal.SIGINT, kill_all) def get_url_from_file(control_url): try: res = requests.get(f"{control_url}?t={int(time.time())}", timeout=5) lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()] for line in lines: parts = line.split() if len(parts) >= 2 and parts[1] == "1": return parts[0] except: pass return None def active_wait(driver, duration, control_url=None): start_time = time.time() last_url = driver.current_url while time.time() - start_time < duration: try: driver.find_element(By.TAG_NAME, 'body').click() except: pass if control_url: new_url = get_url_from_file(control_url) if new_url and new_url != last_url: driver.delete_all_cookies() driver.execute_script("window.localStorage.clear();") driver.execute_script("window.sessionStorage.clear();") driver.execute_cdp_cmd('Network.clearBrowserCache', {}) driver.execute_cdp_cmd('Network.clearBrowserCookies', {}) driver.get(new_url) last_url = new_url time.sleep(3) def start_stream(rtmp_key, sink_name, initial_delay=0): if initial_delay > 0: time.sleep(initial_delay) width, height = 720, 1280 os.environ['PULSE_SINK'] = sink_name disp = Display(visible=0, size=(width, height), backend='xvfb') disp.start() subprocess.Popen(['unclutter', '-idle', '0']) ffmpeg_proc = None try: target_url = get_url_from_file(URL1_CONTROL) if target_url: opts = Options() opts.add_argument('--no-sandbox') opts.add_argument('--disable-dev-shm-usage') opts.add_argument('--autoplay-policy=no-user-gesture-required') opts.add_argument('--disable-notifications') opts.add_argument('--disable-infobars') opts.add_argument('--disable-extensions') opts.add_argument('--disable-popup-blocking') opts.add_argument('--disable-features=TranslateUI') opts.add_argument('--disable-blink-features=AutomationControlled') opts.add_argument('--hide-scrollbars') opts.add_argument(f'--app={target_url}') driver = webdriver.Chrome(options=opts) time.sleep(8) ffmpeg_cmd = [ 'ffmpeg', '-y', '-f', 'x11grab', '-s', f'{width}x{height}', '-i', f":{disp.display}", '-f', 'pulse', '-i', f"{sink_name}.monitor", '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '3000k', '-maxrate', '3000k', '-bufsize', '6000k', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k', '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}" ] ffmpeg_proc = subprocess.Popen(ffmpeg_cmd) active_wait(driver, 9999999, URL1_CONTROL) finally: if ffmpeg_proc: ffmpeg_proc.kill() try: driver.quit() except: pass disp.stop() if __name__ == "__main__": try: requests.get(APPS_SCRIPT_URL, timeout=5) except: pass R1, R2 = os.environ.get('R1'), os.environ.get('R2') p1 = Process(target=start_stream, args=(R1, "Sink1", 0)) p2 = Process(target=start_stream, args=(R2, "Sink2", 60)) p1.start() p2.start() p1.join() p2.join() EOF - name: Run Streaming Script env: R1: ${{ secrets.R1 }} R2: ${{ secrets.R2 }} run: python main.py - name: Wait & Restart if: always() run: | sleep 300 curl -X POST \ -H "Authorization: token ${{ github.token }}" \ -H "Accept: application/vnd.github.v3+json" \ https://api.github.com/repos/${{ github.repository }}/dispatches \ -d '{"event_type": "restart-session"}'
+name: Perpetual Dual Stream
+
+on:
+  workflow_dispatch:
+  repository_dispatch:
+    types: [restart-session]
+
+concurrency:
+  group: streaming-group
+  cancel-in-progress: true
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 🧹 Delete Old Logs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 0
+          keep_minimum_runs: 1
+
+      - name: System Setup
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable unclutter > /dev/null
+          pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
+          pactl load-module module-null-sink sink_name=Sink1
+          pactl load-module module-null-sink sink_name=Sink2
+
+      - name: Python Setup
+        run: pip install selenium pyvirtualdisplay requests
+
+      - name: Create Python Script
+        run: |
+          cat << 'EOF' > main.py
+          import os, subprocess, time, requests, signal
+          from pyvirtualdisplay import Display
+          from selenium import webdriver
+          from selenium.webdriver.chrome.options import Options
+          from selenium.webdriver.common.by import By
+          from multiprocessing import Process
+
+          URL1_CONTROL = "https://meja.do.am/asd/url1.txt"
+          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbx1ObzRZDim5C3jpP0RuxDvJOxPeNinCJCdLxSODm-u3027srdSqjxwGk7kaDsy6HqOZg/exec"
+
+          def kill_all(signum, frame):
+              os._exit(0)
+
+          signal.signal(signal.SIGTERM, kill_all)
+          signal.signal(signal.SIGINT, kill_all)
+
+          def get_url_from_file(control_url):
+              try:
+                  res = requests.get(f"{control_url}?t={int(time.time())}", timeout=5)
+                  lines = [l.strip() for l in res.text.strip().split('\n') if l.strip()]
+                  for line in lines:
+                      parts = line.split()
+                      if len(parts) >= 2 and parts[1] == "1":
+                          return parts[0]
+              except:
+                  pass
+              return None
+
+          def active_wait(driver, duration, control_url=None):
+              start_time = time.time()
+              last_url = driver.current_url
+              while time.time() - start_time < duration:
+                  try:
+                      driver.find_element(By.TAG_NAME, 'body').click()
+                  except:
+                      pass
+                  if control_url:
+                      new_url = get_url_from_file(control_url)
+                      if new_url and new_url != last_url:
+                          driver.delete_all_cookies()
+                          driver.execute_script("window.localStorage.clear();")
+                          driver.execute_script("window.sessionStorage.clear();")
+                          driver.execute_cdp_cmd('Network.clearBrowserCache', {})
+                          driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
+                          driver.get(new_url)
+                          last_url = new_url
+                  time.sleep(3)
+
+          def start_stream(rtmp_key, sink_name, initial_delay=0):
+              if initial_delay > 0:
+                  time.sleep(initial_delay)
+              width, height = 720, 1280
+              os.environ['PULSE_SINK'] = sink_name
+              disp = Display(visible=0, size=(width, height), backend='xvfb')
+              disp.start()
+              subprocess.Popen(['unclutter', '-idle', '0'])
+              ffmpeg_proc = None
+              try:
+                  target_url = get_url_from_file(URL1_CONTROL)
+                  if target_url:
+                      opts = Options()
+                      opts.add_argument('--no-sandbox')
+                      opts.add_argument('--disable-dev-shm-usage')
+                      opts.add_argument('--autoplay-policy=no-user-gesture-required')
+                      opts.add_argument('--disable-notifications')
+                      opts.add_argument('--disable-infobars')
+                      opts.add_argument('--disable-extensions')
+                      opts.add_argument('--disable-popup-blocking')
+                      opts.add_argument('--disable-features=TranslateUI')
+                      opts.add_argument('--disable-blink-features=AutomationControlled')
+                      opts.add_argument('--hide-scrollbars')
+                      opts.add_argument(f'--app={target_url}')
+
+                      driver = webdriver.Chrome(options=opts)
+                      time.sleep(8)
+
+                      ffmpeg_cmd = [
+                          'ffmpeg', '-y',
+                          '-f', 'x11grab',
+                          '-s', f'{width}x{height}',
+                          '-i', f":{disp.display}",
+                          '-f', 'pulse',
+                          '-i', f"{sink_name}.monitor",
+                          '-c:v', 'libx264',
+                          '-preset', 'ultrafast',
+                          '-b:v', '3000k',
+                          '-maxrate', '3000k',
+                          '-bufsize', '6000k',
+                          '-g', '60',
+                          '-keyint_min', '60',
+                          '-sc_threshold', '0',
+                          '-pix_fmt', 'yuv420p',
+                          '-c:a', 'aac',
+                          '-b:a', '128k',
+                          '-f', 'flv',
+                          f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
+                      ]
+
+                      ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
+                      active_wait(driver, 9999999, URL1_CONTROL)
+              finally:
+                  if ffmpeg_proc:
+                      ffmpeg_proc.kill()
+                  try:
+                      driver.quit()
+                  except:
+                      pass
+                  disp.stop()
+
+          if __name__ == "__main__":
+              try:
+                  requests.get(APPS_SCRIPT_URL, timeout=5)
+              except:
+                  pass
+
+              R1, R2 = os.environ.get('R1'), os.environ.get('R2')
+              p1 = Process(target=start_stream, args=(R1, "Sink1", 0))
+              p2 = Process(target=start_stream, args=(R2, "Sink2", 60))
+              p1.start()
+              p2.start()
+              p1.join()
+              p2.join()
+          EOF
+
+      - name: Run Streaming Script
+        env:
+          R1: ${{ secrets.R1 }}
+          R2: ${{ secrets.R2 }}
+        run: python main.py
+
+      - name: Wait & Restart
+        if: always()
+        run: |
+          sleep 300
+          curl -X POST \
+            -H "Authorization: token ${{ github.token }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/dispatches \
+            -d '{"event_type": "restart-session"}'
