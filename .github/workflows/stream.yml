@@ -48,8 +48,13 @@ jobs:
           from selenium.webdriver.common.by import By
           from multiprocessing import Process
 
+          # إعدادات البث الأول
           URL1_CONTROL = "https://meja.do.am/work/url1.txt"
-          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
+          APPS_SCRIPT_URL1 = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
+
+          # إعدادات البث الثاني (تمت الإضافة)
+          URL2_CONTROL = "https://meja.do.am/work/url2.txt"
+          APPS_SCRIPT_URL2 = "https://script.google.com/macros/s/AKfycbxCbxt-jA__NzTNgY8PPitd1xBS3-dC9lMSNjqFZWU0-HI5W2mLg7Px5MmbR90_m8Wz/exec"
 
           def kill_all(signum, frame):
               os._exit(0)
@@ -89,9 +94,16 @@ jobs:
                           last_url = new_url
                   time.sleep(3)
 
-          def start_stream(rtmp_key, sink_name, initial_delay=0):
+          def start_stream(rtmp_key, sink_name, control_url, apps_script_url, initial_delay=0):
+              # تشغيل كود النشر الخاص بهذا البث
+              try:
+                  requests.get(apps_script_url, timeout=5)
+              except:
+                  pass
+
               if initial_delay > 0:
                   time.sleep(initial_delay)
+              
               width, height = 720, 1280
               os.environ['PULSE_SINK'] = sink_name
               disp = Display(visible=0, size=(width, height), backend='xvfb')
@@ -99,7 +111,7 @@ jobs:
               subprocess.Popen(['unclutter', '-idle', '0'])
               ffmpeg_proc = None
               try:
-                  target_url = get_url_from_file(URL1_CONTROL)
+                  target_url = get_url_from_file(control_url)
                   if target_url:
                       opts = Options()
                       opts.add_argument('--no-sandbox')
@@ -110,7 +122,6 @@ jobs:
                       opts.add_argument('--disable-extensions')
                       opts.add_argument('--disable-popup-blocking')
                       opts.add_argument('--disable-features=TranslateUI')
-                      # إخفاء رسالة التحكم الآلي (Automated)
                       opts.add_experimental_option("excludeSwitches", ["enable-automation"])
                       opts.add_experimental_option('useAutomationExtension', False)
                       opts.add_argument('--disable-blink-features=AutomationControlled')
@@ -144,7 +155,7 @@ jobs:
                       ]
 
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
-                      active_wait(driver, 13000, URL1_CONTROL)
+                      active_wait(driver, 13000, control_url)
               finally:
                   if ffmpeg_proc:
                       ffmpeg_proc.kill()
@@ -155,14 +166,14 @@ jobs:
                   disp.stop()
 
           if __name__ == "__main__":
-              try:
-                  requests.get(APPS_SCRIPT_URL, timeout=5)
-              except:
-                  pass
-
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              p1 = Process(target=start_stream, args=(R1, "Sink1", 0))
-              p2 = Process(target=start_stream, args=(R2, "Sink2", 60))
+              
+              # تشغيل البث الأول (Sink1, URL1, Script1)
+              p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1, 0))
+              
+              # تشغيل البث الثاني (Sink2, URL2, Script2)
+              p2 = Process(target=start_stream, args=(R2, "Sink2", URL2_CONTROL, APPS_SCRIPT_URL2, 60))
+              
               p1.start()
               p2.start()
               p1.join()
