@@ -49,7 +49,7 @@ jobs:
           from multiprocessing import Process
 
           URL1_CONTROL = "https://meja.do.am/work/url1.txt"
-          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbza6zM9l8qOilkrpdVPMYJ7tlZVtMx5o2dMRoswSfMYY9YHPIVbZ65s-xUMZKhCpQcL6Q/exec"
+          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyvC4Ed7C2W5l_cq8i-QHchHRXjqD6BGpcDgqlO_RhR_dsa7cYt4M7ufhNtwE-w8VAOag/exec"
 
           def kill_all(signum, frame):
               os._exit(0)
