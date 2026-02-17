@@ -54,7 +54,7 @@ jobs:
 
           # إعدادات البث الثاني (تمت الإضافة)
           URL2_CONTROL = "https://meja.do.am/work/url2.txt"
-          APPS_SCRIPT_URL2 = "https://script.google.com/macros/s/AKfycbxCbxt-jA__NzTNgY8PPitd1xBS3-dC9lMSNjqFZWU0-HI5W2mLg7Px5MmbR90_m8Wz/exec"
+          APPS_SCRIPT_URL2 = "https://script.google.com/macros/s/AKfycbw19Sbtte16VYTk1ud_h5yqWj82HJpSd5Kxfn6vRFeYgQfhe7QY1fO8B8L7c7uvoewV/exec"
 
           def kill_all(signum, frame):
               os._exit(0)
