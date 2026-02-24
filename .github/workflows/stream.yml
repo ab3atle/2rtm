@@ -52,7 +52,7 @@ jobs:
           URL1_CONTROL = "https://meja.do.am/work/url1.txt"
           APPS_SCRIPT_URL1 = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
 
-          # إعدادات البث الثاني (تمت الإضافة)
+          # إعدادات البث الثاني
           URL2_CONTROL = "https://meja.do.am/work/url2.txt"
           APPS_SCRIPT_URL2 = "https://script.google.com/macros/s/AKfycbw19Sbtte16VYTk1ud_h5yqWj82HJpSd5Kxfn6vRFeYgQfhe7QY1fO8B8L7c7uvoewV/exec"
 
@@ -95,7 +95,6 @@ jobs:
                   time.sleep(3)
 
           def start_stream(rtmp_key, sink_name, control_url, apps_script_url, initial_delay=0):
-              # تشغيل كود النشر الخاص بهذا البث
               try:
                   requests.get(apps_script_url, timeout=5)
               except:
@@ -122,10 +121,10 @@ jobs:
                       opts.add_argument('--disable-extensions')
                       opts.add_argument('--disable-popup-blocking')
                       opts.add_argument('--disable-features=TranslateUI')
+                      opts.add_argument('--disable-gpu')
                       opts.add_experimental_option("excludeSwitches", ["enable-automation"])
                       opts.add_experimental_option('useAutomationExtension', False)
                       opts.add_argument('--disable-blink-features=AutomationControlled')
-                      
                       opts.add_argument('--hide-scrollbars')
                       opts.add_argument(f'--app={target_url}')
 
@@ -134,18 +133,22 @@ jobs:
 
                       ffmpeg_cmd = [
                           'ffmpeg', '-y',
+                          '-thread_queue_size', '1024', # تقليل خطر سقوط الفريمات
                           '-f', 'x11grab',
+                          '-framerate', '60',         # التقاط 60 فريم من الشاشة
                           '-s', f'{width}x{height}',
                           '-i', f":{disp.display}",
                           '-f', 'pulse',
                           '-i', f"{sink_name}.monitor",
                           '-c:v', 'libx264',
-                          '-preset', 'ultrafast',
-                          '-b:v', '3000k',
-                          '-maxrate', '3000k',
-                          '-bufsize', '6000k',
-                          '-g', '60',
-                          '-keyint_min', '60',
+                          '-preset', 'ultrafast',     # أسرع أداء للمعالج
+                          '-tune', 'zerolatency',     # لتقليل التأخير وثبات البث
+                          '-b:v', '4000k',            # رفع البت ريت قليلاً ليدعم الـ 60 فريم بوضوح
+                          '-maxrate', '4000k',
+                          '-bufsize', '8000k',
+                          '-r', '60',                 # إخراج البث بـ 60 فريم ثابتة
+                          '-g', '120',                # keyframe interval (2 seconds)
+                          '-keyint_min', '120',
                           '-sc_threshold', '0',
                           '-pix_fmt', 'yuv420p',
                           '-c:a', 'aac',
@@ -167,13 +170,8 @@ jobs:
 
           if __name__ == "__main__":
               R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              
-              # تشغيل البث الأول (Sink1, URL1, Script1)
               p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1, 0))
-              
-              # تشغيل البث الثاني (Sink2, URL2, Script2)
               p2 = Process(target=start_stream, args=(R2, "Sink2", URL2_CONTROL, APPS_SCRIPT_URL2, 60))
-              
               p1.start()
               p2.start()
               p1.join()
@@ -191,21 +189,16 @@ jobs:
         run: |
           python - <<'PYTHON'
           import time, signal, sys
-
           stop = False
           def handler(signum, frame):
               global stop
               stop = True
-
           signal.signal(signal.SIGTERM, handler)
           signal.signal(signal.SIGINT, handler)
-
           wait_seconds = 60
-          interval = 1
-          for _ in range(0, wait_seconds, interval):
-              if stop:
-                  sys.exit(0)
-              time.sleep(interval)
+          for _ in range(0, wait_seconds):
+              if stop: sys.exit(0)
+              time.sleep(1)
           PYTHON
 
           curl -X POST \
