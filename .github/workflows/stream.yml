@@ -1,4 +1,4 @@
-name: Perpetual Dual Stream
+name: Perpetual Single Stream 1080p 90FPS
 
 on:
   workflow_dispatch:
@@ -33,7 +33,6 @@ jobs:
           sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable unclutter > /dev/null
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
           pactl load-module module-null-sink sink_name=Sink1
-          pactl load-module module-null-sink sink_name=Sink2
 
       - name: Python Setup
         run: pip install selenium pyvirtualdisplay requests
@@ -48,13 +47,9 @@ jobs:
           from selenium.webdriver.common.by import By
           from multiprocessing import Process
 
-          # إعدادات البث الأول
-          URL1_CONTROL = "https://meja.do.am/work/url1.txt"
-          APPS_SCRIPT_URL1 = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
-
-          # إعدادات البث الثاني
-          URL2_CONTROL = "https://meja.do.am/work/url2.txt"
-          APPS_SCRIPT_URL2 = "https://script.google.com/macros/s/AKfycbw19Sbtte16VYTk1ud_h5yqWj82HJpSd5Kxfn6vRFeYgQfhe7QY1fO8B8L7c7uvoewV/exec"
+          # إعدادات البث (تم دمجها لبث واحد)
+          URL_CONTROL = "https://meja.do.am/work/url1.txt"
+          APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
 
           def kill_all(signum, frame):
               os._exit(0)
@@ -94,21 +89,20 @@ jobs:
                           last_url = new_url
                   time.sleep(3)
 
-          def start_stream(rtmp_key, sink_name, control_url, apps_script_url, initial_delay=0):
+          def start_stream(rtmp_key, sink_name, control_url, apps_script_url):
               try:
                   requests.get(apps_script_url, timeout=5)
               except:
                   pass
 
-              if initial_delay > 0:
-                  time.sleep(initial_delay)
-              
-              width, height = 720, 1280
+              # إعدادات الجودة 1080p (عمودي 1080x1920)
+              width, height = 1080, 1920
               os.environ['PULSE_SINK'] = sink_name
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
               subprocess.Popen(['unclutter', '-idle', '0'])
               ffmpeg_proc = None
+              
               try:
                   target_url = get_url_from_file(control_url)
                   if target_url:
@@ -126,39 +120,43 @@ jobs:
                       opts.add_experimental_option('useAutomationExtension', False)
                       opts.add_argument('--disable-blink-features=AutomationControlled')
                       opts.add_argument('--hide-scrollbars')
+                      opts.add_argument(f'--window-size={width},{height}')
                       opts.add_argument(f'--app={target_url}')
 
                       driver = webdriver.Chrome(options=opts)
-                      time.sleep(8)
+                      time.sleep(10)
 
+                      # إعدادات البث: 1080p مع 90 فريم
                       ffmpeg_cmd = [
                           'ffmpeg', '-y',
-                          '-thread_queue_size', '1024', # تقليل خطر سقوط الفريمات
+                          '-thread_queue_size', '4096', 
                           '-f', 'x11grab',
-                          '-framerate', '60',         # التقاط 60 فريم من الشاشة
+                          '-framerate', '90',          # التقاط 90 فريم
                           '-s', f'{width}x{height}',
                           '-i', f":{disp.display}",
                           '-f', 'pulse',
                           '-i', f"{sink_name}.monitor",
                           '-c:v', 'libx264',
-                          '-preset', 'ultrafast',     # أسرع أداء للمعالج
-                          '-tune', 'zerolatency',     # لتقليل التأخير وثبات البث
-                          '-b:v', '4000k',            # رفع البت ريت قليلاً ليدعم الـ 60 فريم بوضوح
-                          '-maxrate', '4000k',
-                          '-bufsize', '8000k',
-                          '-r', '60',                 # إخراج البث بـ 60 فريم ثابتة
-                          '-g', '120',                # keyframe interval (2 seconds)
-                          '-keyint_min', '120',
+                          '-preset', 'ultrafast',      # لتقليل استهلاك المعالج
+                          '-tune', 'zerolatency',
+                          '-b:v', '9000k',             # بت ريت عالي لضمان جودة 1080p
+                          '-maxrate', '9000k',
+                          '-bufsize', '18000k',
+                          '-r', '90',                  # إخراج 90 فريم ثابتة
+                          '-g', '180',                 # Keyframe كل ثانيتين (90*2)
+                          '-keyint_min', '180',
                           '-sc_threshold', '0',
                           '-pix_fmt', 'yuv420p',
                           '-c:a', 'aac',
                           '-b:a', '128k',
+                          '-ar', '44100',
                           '-f', 'flv',
                           f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
 
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
-                      active_wait(driver, 13000, control_url)
+                      # مدة الأكشن (حوالي 6 ساعات)
+                      active_wait(driver, 21000, control_url)
               finally:
                   if ffmpeg_proc:
                       ffmpeg_proc.kill()
@@ -169,19 +167,15 @@ jobs:
                   disp.stop()
 
           if __name__ == "__main__":
-              R1, R2 = os.environ.get('R1'), os.environ.get('R2')
-              p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1, 0))
-              p2 = Process(target=start_stream, args=(R2, "Sink2", URL2_CONTROL, APPS_SCRIPT_URL2, 60))
-              p1.start()
-              p2.start()
-              p1.join()
-              p2.join()
+              # يستخدم R1 فقط للبث الوحيد
+              R1 = os.environ.get('R1')
+              if R1:
+                  start_stream(R1, "Sink1", URL_CONTROL, APPS_SCRIPT_URL)
           EOF
 
       - name: Run Streaming Script
         env:
           R1: ${{ secrets.R1 }}
-          R2: ${{ secrets.R2 }}
         run: python main.py
 
       - name: Wait & Restart
@@ -195,7 +189,7 @@ jobs:
               stop = True
           signal.signal(signal.SIGTERM, handler)
           signal.signal(signal.SIGINT, handler)
-          wait_seconds = 60
+          wait_seconds = 5
           for _ in range(0, wait_seconds):
               if stop: sys.exit(0)
               time.sleep(1)
