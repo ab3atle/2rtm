@@ -1,4 +1,4 @@
-name: Perpetual Single Stream
+name: Perpetual Single Stream 1080p 90fps
 
 on:
   workflow_dispatch:
@@ -29,7 +29,6 @@ jobs:
 
       - name: System Setup (With Retry)
         run: |
-          # وظيفة لإعادة المحاولة في حال فشل الأمر
           retry() {
             for i in {1..5}; do
               echo "Attempt $i..."
@@ -38,15 +37,9 @@ jobs:
             done
             return 1
           }
-
-          echo "Optimizing package manager..."
           sudo rm -rf /var/lib/apt/lists/*
-          
-          echo "Updating and Installing dependencies..."
           retry sudo apt-get update -qq
           retry sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable unclutter > /dev/null
-
-          echo "Setting up Audio..."
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
           pactl load-module module-null-sink sink_name=Sink1
 
@@ -84,13 +77,24 @@ jobs:
                   pass
               return None
 
-          def active_wait(driver, duration, control_url=None):
+          def active_wait(driver, duration, control_url):
               start_time = time.time()
+              last_url = driver.current_url
               while time.time() - start_time < duration:
                   try:
+                      # محاولة منع توقف الصفحة بالنقر
                       driver.find_element(By.TAG_NAME, 'body').click()
                   except:
                       pass
+                  
+                  # تفقد الرابط كل 10 ثوانٍ للتحديث
+                  new_url = get_url_from_file(control_url)
+                  if new_url and new_url != last_url:
+                      print(f"Switching to new URL: {new_url}")
+                      driver.get(new_url)
+                      last_url = new_url
+                      time.sleep(5)
+                  
                   time.sleep(10)
 
           def start_stream(rtmp_key, sink_name, control_url, apps_script_url):
@@ -98,6 +102,7 @@ jobs:
                   requests.get(apps_script_url, timeout=5)
               except: pass
 
+              # أبعاد الـ 1080 (عمودي كما كان سابقاً 1080x1920)
               width, height = 1080, 1920
               os.environ['PULSE_SINK'] = sink_name
               disp = Display(visible=0, size=(width, height), backend='xvfb')
@@ -109,9 +114,10 @@ jobs:
               
               try:
                   target_url = None
-                  for _ in range(10): # زيادة محاولات جلب الرابط
+                  for _ in range(12):
                       target_url = get_url_from_file(control_url)
                       if target_url: break
+                      print("Searching for URL...")
                       time.sleep(5)
 
                   if target_url:
@@ -121,6 +127,18 @@ jobs:
                       opts.add_argument('--autoplay-policy=no-user-gesture-required')
                       opts.add_argument('--disable-gpu')
                       opts.add_argument('--hide-scrollbars')
+                      
+                      # منع جميع أنواع الإشعارات والمنبثقات
+                      opts.add_argument('--disable-notifications')
+                      opts.add_argument('--disable-popup-blocking')
+                      opts.add_argument('--disable-infobars')
+                      prefs = {
+                          "profile.default_content_setting_values.notifications": 2,
+                          "profile.default_content_setting_values.popups": 2,
+                          "profile.default_content_setting_values.geolocation": 2,
+                          "profile.default_content_setting_values.media_stream": 2
+                      }
+                      opts.add_experimental_option("prefs", prefs)
                       opts.add_argument(f'--app={target_url}')
 
                       driver = webdriver.Chrome(options=opts)
@@ -134,6 +152,7 @@ jobs:
                           '-i', f":{disp.display}",
                           '-f', 'pulse', '-i', f"{sink_name}.monitor",
                           '-c:v', 'libx264', '-preset', 'ultrafast',
+                          '-tune', 'zerolatency',
                           '-b:v', '6000k', '-maxrate', '6000k', '-bufsize', '12000k',
                           '-r', '90', '-g', '180', '-pix_fmt', 'yuv420p',
                           '-c:a', 'aac', '-b:a', '128k',
@@ -141,7 +160,7 @@ jobs:
                       ]
 
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
-                      active_wait(driver, 20000) # زيادة مدة الانتظار
+                      active_wait(driver, 21000, control_url)
               finally:
                   if ffmpeg_proc: ffmpeg_proc.kill()
                   if driver: driver.quit()
@@ -151,9 +170,7 @@ jobs:
           if __name__ == "__main__":
               R1 = os.environ.get('R1')
               if R1:
-                  p1 = Process(target=start_stream, args=(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1))
-                  p1.start()
-                  p1.join()
+                  start_stream(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1)
           EOF
 
       - name: Run Streaming Script
@@ -164,7 +181,7 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          sleep 6
+          sleep 5
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
             -H "Accept: application/vnd.github.v3+json" \
