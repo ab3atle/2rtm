@@ -47,7 +47,7 @@ jobs:
           from selenium.webdriver.common.by import By
           from multiprocessing import Process
 
-          # إعدادات البث
+          # إعدادات البث الأول
           URL1_CONTROL = "https://meja.do.am/work/url1.txt"
           APPS_SCRIPT_URL1 = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
 
@@ -98,8 +98,7 @@ jobs:
               if initial_delay > 0:
                   time.sleep(initial_delay)
               
-              # إعدادات الجودة 1080p
-              width, height = 1920, 1080
+              width, height = 720, 1280
               os.environ['PULSE_SINK'] = sink_name
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
@@ -122,7 +121,6 @@ jobs:
                       opts.add_experimental_option('useAutomationExtension', False)
                       opts.add_argument('--disable-blink-features=AutomationControlled')
                       opts.add_argument('--hide-scrollbars')
-                      opts.add_argument(f'--window-size={width},{height}')
                       opts.add_argument(f'--app={target_url}')
 
                       driver = webdriver.Chrome(options=opts)
@@ -140,9 +138,9 @@ jobs:
                           '-c:v', 'libx264',
                           '-preset', 'ultrafast',
                           '-tune', 'zerolatency',
-                          '-b:v', '4500k', 
-                          '-maxrate', '4500k',
-                          '-bufsize', '9000k',
+                          '-b:v', '4000k',
+                          '-maxrate', '4000k',
+                          '-bufsize', '8000k',
                           '-r', '60',
                           '-g', '120',
                           '-keyint_min', '120',
@@ -167,8 +165,8 @@ jobs:
 
           if __name__ == "__main__":
               R1 = os.environ.get('R1')
-              # تشغيل بث واحد فقط R1
-              start_stream(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1, 0)
+              if R1:
+                  start_stream(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1, 0)
           EOF
 
       - name: Run Streaming Script
@@ -187,7 +185,7 @@ jobs:
               stop = True
           signal.signal(signal.SIGTERM, handler)
           signal.signal(signal.SIGINT, handler)
-          wait_seconds = 5
+          wait_seconds = 6
           for _ in range(0, wait_seconds):
               if stop: sys.exit(0)
               time.sleep(1)
