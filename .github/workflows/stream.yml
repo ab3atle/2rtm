@@ -1,4 +1,4 @@
-name: Perpetual Single Stream 1080p 90fps
+name: Perpetual Dual Stream
 
 on:
   workflow_dispatch:
@@ -27,19 +27,10 @@ jobs:
           retain_days: 0
           keep_minimum_runs: 1
 
-      - name: System Setup (With Retry)
+      - name: System Setup
         run: |
-          retry() {
-            for i in {1..5}; do
-              echo "Attempt $i..."
-              $@ && return 0
-              sleep 5
-            done
-            return 1
-          }
-          sudo rm -rf /var/lib/apt/lists/*
-          retry sudo apt-get update -qq
-          retry sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable unclutter > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb ffmpeg pulseaudio google-chrome-stable unclutter > /dev/null
           pulseaudio -D --exit-idle-time=-1 --disallow-exit || true
           pactl load-module module-null-sink sink_name=Sink1
 
@@ -56,6 +47,7 @@ jobs:
           from selenium.webdriver.common.by import By
           from multiprocessing import Process
 
+          # إعدادات البث
           URL1_CONTROL = "https://meja.do.am/work/url1.txt"
           APPS_SCRIPT_URL1 = "https://script.google.com/macros/s/AKfycby8mnPnqqSqUSS9YcCJGB8UvVi3wYCYxT1uDBeTBS8C_AMlNrwLzvXb_QkHFxwYDpirPw/exec"
 
@@ -77,100 +69,106 @@ jobs:
                   pass
               return None
 
-          def active_wait(driver, duration, control_url):
+          def active_wait(driver, duration, control_url=None):
               start_time = time.time()
               last_url = driver.current_url
               while time.time() - start_time < duration:
                   try:
-                      # محاولة منع توقف الصفحة بالنقر
                       driver.find_element(By.TAG_NAME, 'body').click()
                   except:
                       pass
-                  
-                  # تفقد الرابط كل 10 ثوانٍ للتحديث
-                  new_url = get_url_from_file(control_url)
-                  if new_url and new_url != last_url:
-                      print(f"Switching to new URL: {new_url}")
-                      driver.get(new_url)
-                      last_url = new_url
-                      time.sleep(5)
-                  
-                  time.sleep(10)
+                  if control_url:
+                      new_url = get_url_from_file(control_url)
+                      if new_url and new_url != last_url:
+                          driver.delete_all_cookies()
+                          driver.execute_script("window.localStorage.clear();")
+                          driver.execute_script("window.sessionStorage.clear();")
+                          driver.execute_cdp_cmd('Network.clearBrowserCache', {})
+                          driver.execute_cdp_cmd('Network.clearBrowserCookies', {})
+                          driver.get(new_url)
+                          last_url = new_url
+                  time.sleep(3)
 
-          def start_stream(rtmp_key, sink_name, control_url, apps_script_url):
+          def start_stream(rtmp_key, sink_name, control_url, apps_script_url, initial_delay=0):
               try:
                   requests.get(apps_script_url, timeout=5)
-              except: pass
+              except:
+                  pass
 
-              # أبعاد الـ 1080 (عمودي كما كان سابقاً 1080x1920)
-              width, height = 1080, 1920
+              if initial_delay > 0:
+                  time.sleep(initial_delay)
+              
+              # إعدادات الجودة 1080p
+              width, height = 1920, 1080
               os.environ['PULSE_SINK'] = sink_name
               disp = Display(visible=0, size=(width, height), backend='xvfb')
               disp.start()
-              
-              unclutter_proc = subprocess.Popen(['unclutter', '-idle', '0'])
+              subprocess.Popen(['unclutter', '-idle', '0'])
               ffmpeg_proc = None
-              driver = None
-              
               try:
-                  target_url = None
-                  for _ in range(12):
-                      target_url = get_url_from_file(control_url)
-                      if target_url: break
-                      print("Searching for URL...")
-                      time.sleep(5)
-
+                  target_url = get_url_from_file(control_url)
                   if target_url:
                       opts = Options()
                       opts.add_argument('--no-sandbox')
                       opts.add_argument('--disable-dev-shm-usage')
                       opts.add_argument('--autoplay-policy=no-user-gesture-required')
-                      opts.add_argument('--disable-gpu')
-                      opts.add_argument('--hide-scrollbars')
-                      
-                      # منع جميع أنواع الإشعارات والمنبثقات
                       opts.add_argument('--disable-notifications')
-                      opts.add_argument('--disable-popup-blocking')
                       opts.add_argument('--disable-infobars')
-                      prefs = {
-                          "profile.default_content_setting_values.notifications": 2,
-                          "profile.default_content_setting_values.popups": 2,
-                          "profile.default_content_setting_values.geolocation": 2,
-                          "profile.default_content_setting_values.media_stream": 2
-                      }
-                      opts.add_experimental_option("prefs", prefs)
+                      opts.add_argument('--disable-extensions')
+                      opts.add_argument('--disable-popup-blocking')
+                      opts.add_argument('--disable-features=TranslateUI')
+                      opts.add_argument('--disable-gpu')
+                      opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+                      opts.add_experimental_option('useAutomationExtension', False)
+                      opts.add_argument('--disable-blink-features=AutomationControlled')
+                      opts.add_argument('--hide-scrollbars')
+                      opts.add_argument(f'--window-size={width},{height}')
                       opts.add_argument(f'--app={target_url}')
 
                       driver = webdriver.Chrome(options=opts)
-                      time.sleep(10)
+                      time.sleep(8)
 
                       ffmpeg_cmd = [
                           'ffmpeg', '-y',
+                          '-thread_queue_size', '1024',
                           '-f', 'x11grab',
-                          '-framerate', '90',
+                          '-framerate', '60',
                           '-s', f'{width}x{height}',
                           '-i', f":{disp.display}",
-                          '-f', 'pulse', '-i', f"{sink_name}.monitor",
-                          '-c:v', 'libx264', '-preset', 'ultrafast',
+                          '-f', 'pulse',
+                          '-i', f"{sink_name}.monitor",
+                          '-c:v', 'libx264',
+                          '-preset', 'ultrafast',
                           '-tune', 'zerolatency',
-                          '-b:v', '6000k', '-maxrate', '6000k', '-bufsize', '12000k',
-                          '-r', '90', '-g', '180', '-pix_fmt', 'yuv420p',
-                          '-c:a', 'aac', '-b:a', '128k',
-                          '-f', 'flv', f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
+                          '-b:v', '4500k', 
+                          '-maxrate', '4500k',
+                          '-bufsize', '9000k',
+                          '-r', '60',
+                          '-g', '120',
+                          '-keyint_min', '120',
+                          '-sc_threshold', '0',
+                          '-pix_fmt', 'yuv420p',
+                          '-c:a', 'aac',
+                          '-b:a', '128k',
+                          '-f', 'flv',
+                          f"rtmp://a.rtmp.youtube.com/live2/{rtmp_key}"
                       ]
 
                       ffmpeg_proc = subprocess.Popen(ffmpeg_cmd)
-                      active_wait(driver, 21000, control_url)
+                      active_wait(driver, 13000, control_url)
               finally:
-                  if ffmpeg_proc: ffmpeg_proc.kill()
-                  if driver: driver.quit()
-                  unclutter_proc.kill()
+                  if ffmpeg_proc:
+                      ffmpeg_proc.kill()
+                  try:
+                      driver.quit()
+                  except:
+                      pass
                   disp.stop()
 
           if __name__ == "__main__":
               R1 = os.environ.get('R1')
-              if R1:
-                  start_stream(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1)
+              # تشغيل بث واحد فقط R1
+              start_stream(R1, "Sink1", URL1_CONTROL, APPS_SCRIPT_URL1, 0)
           EOF
 
       - name: Run Streaming Script
@@ -181,7 +179,20 @@ jobs:
       - name: Wait & Restart
         if: always()
         run: |
-          sleep 5
+          python - <<'PYTHON'
+          import time, signal, sys
+          stop = False
+          def handler(signum, frame):
+              global stop
+              stop = True
+          signal.signal(signal.SIGTERM, handler)
+          signal.signal(signal.SIGINT, handler)
+          wait_seconds = 60
+          for _ in range(0, wait_seconds):
+              if stop: sys.exit(0)
+              time.sleep(1)
+          PYTHON
+
           curl -X POST \
             -H "Authorization: token ${{ github.token }}" \
             -H "Accept: application/vnd.github.v3+json" \
