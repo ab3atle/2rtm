@@ -1,5 +1,5 @@
 name: Perpetual Dual Stream
-
+stop
 on:
   workflow_dispatch:
   repository_dispatch:
